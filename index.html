@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>Irys Word Hunt (Testnet)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="main.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script src="main.js" type="module"></script>
+</head>
+
+<body>
+
+    <h1>Irys Word Hunt (Testnet)</h1>
+
+    <div class="card">
+        <button id="connectBtn">Connect Wallet</button>
+        <button id="addChainBtn">Add/Switch to Irys Testnet</button>
+        <div id="status"></div>
+    </div>
+
+    <div class="card">
+        <div class="row">
+            <div><strong>Today:</strong> <span id="todayStr"></span></div>
+            <div><strong>Your address:</strong> <span id="addr"></span></div>
+        </div>
+        <p>Guess the 5-letter word. After each guess we record the attempt onchain with your wallet.</p>
+        <div class="row">
+            <input id="guess" maxlength="5" placeholder="type 5 letters" />
+            <button id="submitBtn">Submit Guess</button>
+        </div>
+        <div id="board"></div>
+        <div id="mintStatus" class="log"></div>
+        <div id="txLink"></div>
+    </div>
+
+    <div class="card">
+        <div class="row">
+            <div>
+                <strong>Leaderboard date:</strong>
+                <input type="date" id="lbDate" />
+            </div>
+            <br>
+            <div>
+                <button id="loadLbBtn">Load Leaderboard</button>
+            </div>
+        </div>
+        <div id="lbStatus" class="log"></div>
+        <table id="lbTable" style="width:100%; border-collapse: collapse; margin-top:10px;">
+            <thead>
+                <tr>
+                    <th style="text-align:left;border-bottom:1px solid #ddd;">#</th>
+                    <th style="text-align:left;border-bottom:1px solid #ddd;">Wallet</th>
+                    <th style="text-align:left;border-bottom:1px solid #ddd;">Best Try</th>
+                    <th style="text-align:left;border-bottom:1px solid #ddd;">First Solved</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+
+
+</body>
+
+</html>
