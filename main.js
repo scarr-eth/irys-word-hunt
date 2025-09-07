@@ -1,296 +1,465 @@
-  import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.esm.min.js";
+// app.js (with persistent progress + fixed leaderboard + toasts)
+import { ethers } from "https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.esm.min.js";
 
-  // ====== FILL THESE VALUES ======
-  const IRYS_CHAIN_ID_HEX = "0x4F6"; // e.g., 1270 decimal = 0x4F6
-  const IRYS_PARAMS = {
-    chainId: IRYS_CHAIN_ID_HEX,
-    chainName: "Irys Testnet",
-    nativeCurrency: { name: "Irys Testnet", symbol: "IRYS", decimals: 18 }, // <-- set symbol if different
-    rpcUrls: ["https://testnet-rpc.irys.xyz/v1/execution-rpc"],       // e.g., "https://testnet.irys.io/rpc"
-    blockExplorerUrls: ["https://explorer.irys.xyz/"] // e.g., "https://explorer.testnet.irys.io"
-  };
-  const CONTRACT_ADDRESS = "0x077d85eeEebaA96515CEAd8C3d3947835369B761";
+/* ===========================
+   REQUIRED SETTINGS (FILLED)
+=========================== */
+// Chain ID: 1270 (dec) = 0x4F6 (hex)
+const IRYS_CHAIN_ID_HEX = "0x4F6";
+const IRYS_PARAMS = {
+  chainId: IRYS_CHAIN_ID_HEX,
+  chainName: "Irys Testnet",
+  nativeCurrency: { name: "Irys Test", symbol: "tIRYS", decimals: 18 },
+  rpcUrls: ["https://testnet-rpc.irys.xyz/v1/execution-rpc"],
+  blockExplorerUrls: ["https://explorer.irys.xyz/"]
+};
+const CONTRACT_ADDRESS = "0x077d85eeEebaA96515CEAd8C3d3947835369B761";
+const DEPLOY_BLOCK = 9117711;     // your deploy block
+const LB_LOOKBACK_BLOCKS = 20000; // fallback window if not using DEPLOY_BLOCK
 
-  // Set this to the block number where you deployed the contract (for faster log queries)
-  const DEPLOY_BLOCK = 9117711; // e.g., 123456
-
-  // ====== ABI (minimal) ======
-  const ABI = [
-    {
-      "anonymous": false,
-      "inputs": [
-        { "indexed": true,  "internalType": "address", "name": "player",  "type": "address" },
-        { "indexed": true,  "internalType": "bytes32", "name": "dayId",   "type": "bytes32" },
-        { "indexed": false, "internalType": "string",  "name": "uri",     "type": "string" },
-        { "indexed": false, "internalType": "bool",    "name": "solved",  "type": "bool" },
-        { "indexed": false, "internalType": "uint8",   "name": "tryIndex","type": "uint8" }
-      ],
-      "name": "Attempt",
-      "type": "event"
-    },
-    {
-      "inputs": [
-        { "internalType": "bytes32", "name": "dayId",    "type": "bytes32" },
-        { "internalType": "string",  "name": "uri",      "type": "string" },
-        { "internalType": "bool",    "name": "solved",   "type": "bool" },
-        { "internalType": "uint8",   "name": "tryIndex", "type": "uint8" }
-      ],
-      "name": "submitAttempt",
-      "outputs": [],
-      "stateMutability": "nonpayable",
-      "type": "function"
-    },
-    {
-      "inputs": [
-        { "internalType": "bytes32", "name": "dayId",  "type": "bytes32" },
-        { "internalType": "address", "name": "player","type": "address" }
-      ],
-      "name": "bestTryFor",
-      "outputs": [{ "internalType": "uint8", "name": "", "type": "uint8" }],
-      "stateMutability": "view",
-      "type": "function"
-    }
-  ];
-
-  // ====== Game Config ======
-  const STAGES_PER_DAY = 4;
-  const WORDLIST = ["irysx","alpha","chain","store","proof","miner","agent","swarm","datax","evmxx"]; // extend anytime
-
-  // ====== UI Elements (make sure these IDs exist in your HTML) ======
-  const connectBtn  = document.getElementById("connectBtn");
-  const addChainBtn = document.getElementById("addChainBtn");
-  const statusEl    = document.getElementById("status");
-  const addrEl      = document.getElementById("addr");
-  const todayEl     = document.getElementById("todayStr");
-  const guessEl     = document.getElementById("guess");
-  const submitBtn   = document.getElementById("submitBtn");
-  const board       = document.getElementById("board");
-  const mintStatus  = document.getElementById("mintStatus");
-  const txLink      = document.getElementById("txLink");
-
-  // NEW: stage indicators
-  const stageNowEl   = document.getElementById("stageNow");   // <span id="stageNow"></span>
-  const stageTotalEl = document.getElementById("stageTotal"); // <span id="stageTotal"></span>
-
-  // Leaderboard bits
-  const lbDate       = document.getElementById("lbDate");     // <input type="date" id="lbDate" />
-  const lbStageEl    = document.getElementById("lbStage");    // <input type="number" id="lbStage" min="1" max="4" value="1" />
-  const loadLbBtn    = document.getElementById("loadLbBtn");  // <button id="loadLbBtn">...</button>
-  const lbStatus     = document.getElementById("lbStatus");   // <div id="lbStatus"></div>
-  const lbTableBody  = document.querySelector("#lbTable tbody"); // <table id="lbTable"><tbody></tbody></table>
-
-  // ====== State ======
-  const todayStr = new Date().toISOString().slice(0,10); // YYYY-MM-DD
-  todayEl && (todayEl.textContent = todayStr);
-
-  let provider, signer, contract, account;
-  let currentStage = 1; // 1..STAGES_PER_DAY
-  let tryIndex = 1;
-
-  // Initialize small UI bits
-  if (stageTotalEl) stageTotalEl.textContent = STAGES_PER_DAY;
-  if (stageNowEl)   stageNowEl.textContent   = currentStage;
-  if (lbDate)       lbDate.value             = todayStr;
-  if (lbStageEl)    lbStageEl.value          = "1";
-
-  // ====== Helpers ======
-  function logOk(msg){ if (statusEl) statusEl.innerHTML = `<span class="ok">${msg}</span>`; }
-  function logErr(msg){ if (statusEl) statusEl.innerHTML = `<span class="err">${msg}</span>`; }
-  function short(addr){ return addr.slice(0,6) + "…" + addr.slice(-4); }
-
-  // Word compare ('g' green, 'y' yellow, 'n' gray)
-  function compare(guess, target){
-    guess = guess.toLowerCase();
-    const res = Array(guess.length).fill('n');
-    const tcount = {};
-    for (let c of target){ tcount[c] = (tcount[c]||0)+1; }
-    for (let i=0;i<guess.length;i++){
-      if (guess[i]===target[i]){ res[i]='g'; tcount[guess[i]]--; }
-    }
-    for (let i=0;i<guess.length;i++){
-      if (res[i]==='n' && tcount[guess[i]]>0){ res[i]='y'; tcount[guess[i]]--; }
-    }
-    return res.join('');
+/* ===========================
+             ABI
+=========================== */
+const ABI = [
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, internalType: "address", name: "player", type: "address" },
+      { indexed: true, internalType: "bytes32", name: "dayId", type: "bytes32" },
+      { indexed: false, internalType: "string", name: "uri", type: "string" },
+      { indexed: false, internalType: "bool", name: "solved", type: "bool" },
+      { indexed: false, internalType: "uint8", name: "tryIndex", type: "uint8" }
+    ],
+    name: "Attempt",
+    type: "event"
+  },
+  {
+    inputs: [
+      { internalType: "bytes32", name: "dayId", type: "bytes32" },
+      { internalType: "string", name: "uri", type: "string" },
+      { internalType: "bool", name: "solved", type: "bool" },
+      { internalType: "uint8", name: "tryIndex", type: "uint8" }
+    ],
+    name: "submitAttempt",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function"
+  },
+  {
+    inputs: [
+      { internalType: "bytes32", name: "dayId", type: "bytes32" },
+      { internalType: "address", name: "player", type: "address" }
+    ],
+    name: "bestTryFor",
+    outputs: [{ internalType: "uint8", name: "", type: "uint8" }],
+    stateMutability: "view",
+    type: "function"
   }
+];
 
-  function renderRow(guess, pattern){
-    const wrap = document.createElement('div');
-    for (let i=0;i<guess.length;i++){
-      const tile = document.createElement('span');
-      tile.className = `tile ${pattern[i]}`;
-      tile.textContent = guess[i].toUpperCase();
-      wrap.appendChild(tile);
+/* ===========================
+         Game Config
+=========================== */
+const STAGES_PER_DAY = 4;
+const WORDLIST = ["irysx", "alpha", "chain", "store", "proof", "miner", "agent", "swarm", "datax", "evmxx"];
+
+/* ===========================
+          DOM Elements
+=========================== */
+// Nav / chips
+const connectBtn = document.getElementById("connectBtn");
+const connectedGroup = document.getElementById("connectedGroup");
+const balanceChip = document.getElementById("balanceChip");
+const balanceText = document.getElementById("balanceText");
+const addrChip = document.getElementById("addrChip");
+const addrShortEl = document.getElementById("addrShort");
+
+// Game
+const addrEl = document.getElementById("addr");
+const todayEl = document.getElementById("todayStr");
+const guessEl = document.getElementById("guess");
+const submitBtn = document.getElementById("submitBtn");
+const board = document.getElementById("board");
+const mintStatus = document.getElementById("mintStatus");
+const txLink = document.getElementById("txLink");
+
+const stageNowEl = document.getElementById("stageNow");
+const stageTotalEl = document.getElementById("stageTotal");
+
+// Leaderboard
+const lbDate = document.getElementById("lbDate");
+const lbStageEl = document.getElementById("lbStage");
+const loadLbBtn = document.getElementById("loadLbBtn");
+const lbStatus = document.getElementById("lbStatus");
+const lbTableBody = document.querySelector("#lbTable tbody");
+
+// Modals / toasts
+const walletModal = document.getElementById("walletModal");
+const walletModalClose = document.getElementById("walletModalClose");
+const toastHost = document.getElementById("toastHost");
+
+/* ===========================
+          State / Init
+=========================== */
+const todayStr = new Date().toISOString().slice(0, 10);
+if (todayEl) todayEl.textContent = todayStr;
+
+let provider, signer, contract, account;
+let currentStage = 1;
+let tryIndex = 1;
+
+// persistent rows: [{stage, guess, pattern}]
+let gameRows = [];
+
+if (stageTotalEl) stageTotalEl.textContent = STAGES_PER_DAY;
+if (stageNowEl) stageNowEl.textContent = currentStage;
+if (lbDate) lbDate.value = todayStr;
+if (lbStageEl) lbStageEl.value = "1";
+
+/* ===========================
+          Persistence
+=========================== */
+const STORAGE_KEY_PREFIX = "irys-word-hunt";
+const stateKey = (dateStr) => `${STORAGE_KEY_PREFIX}:${dateStr}`;
+
+function saveState() {
+  try {
+    const data = {
+      currentStage,
+      tryIndex,
+      rows: gameRows,
+      completed: !!(guessEl?.disabled)
+    };
+    localStorage.setItem(stateKey(todayStr), JSON.stringify(data));
+  } catch (e) { /* ignore */ }
+}
+
+function rebuildBoard() {
+  if (!board) return;
+  board.innerHTML = "";
+  let prevStage = null;
+  for (const r of gameRows) {
+    if (prevStage !== null && r.stage !== prevStage) {
+      const hr = document.createElement("hr");
+      board.appendChild(hr);
     }
-    board && board.appendChild(wrap);
+    renderRow(r.guess, r.pattern);
+    prevStage = r.stage;
   }
+}
 
-  // Stage-aware word + on-chain id
-  function dailyWord(dayStr, stage){
-    const seed = `${dayStr}#${stage}`;
-    const hash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(seed));
-    const n = parseInt(hash.slice(2,10), 16);
-    return WORDLIST[n % WORDLIST.length];
+function hydrateFromStorage() {
+  try {
+    const raw = localStorage.getItem(stateKey(todayStr));
+    if (!raw) return;
+    const s = JSON.parse(raw);
+    if (typeof s.currentStage === "number") currentStage = Math.min(Math.max(1, s.currentStage), STAGES_PER_DAY);
+    if (typeof s.tryIndex === "number") tryIndex = Math.max(1, s.tryIndex);
+    if (Array.isArray(s.rows)) gameRows = s.rows.filter(r => r && typeof r.stage === "number" && typeof r.guess === "string" && typeof r.pattern === "string");
+    rebuildBoard();
+    if (stageNowEl) stageNowEl.textContent = currentStage;
+    if (s.completed) {
+      if (guessEl) guessEl.disabled = true;
+      if (submitBtn) submitBtn.disabled = true;
+    }
+  } catch (e) {
+    console.error("hydrate failed:", e);
   }
-  function currentSolution(){ return dailyWord(todayStr, currentStage); }
-  function dayStageId(dayStr, stage){
-    const key = `${dayStr}#${stage}`;
-    return ethers.utils.keccak256(ethers.utils.toUtf8Bytes(key));
-  }
+}
+// hydrate immediately
+hydrateFromStorage();
 
-  // ====== Wallet / Network ======
-  async function connect(){
-    if (!window.ethereum){ alert("Install MetaMask"); return; }
-    await window.ethereum.request({ method: "eth_requestAccounts" });
-    provider = new ethers.providers.Web3Provider(window.ethereum);
+/* ===========================
+          UI Helpers
+=========================== */
+function short(addr) { return addr ? (addr.slice(0, 6) + "…" + addr.slice(-4)) : ""; }
+function showWalletModal(show) { if (!walletModal) return; walletModal.style.display = show ? "grid" : "none"; }
+walletModalClose && (walletModalClose.onclick = () => showWalletModal(false));
+
+function toast(msg, kind = "info", ms = 2800) {
+  const t = document.createElement("div");
+  t.className = `toast ${kind}`;
+  t.textContent = msg;
+  toastHost.appendChild(t);
+  requestAnimationFrame(() => t.classList.add("show"));
+  const h = setTimeout(() => {
+    t.classList.remove("show");
+    setTimeout(() => t.remove(), 250);
+  }, ms);
+  return { close: () => { clearTimeout(h); t.classList.remove("show"); setTimeout(() => t.remove(), 250); } };
+}
+
+function renderRow(guess, pattern) {
+  const wrap = document.createElement('div');
+  for (let i = 0; i < guess.length; i++) {
+    const tile = document.createElement('span');
+    tile.className = `tile ${pattern[i]}`;
+    tile.textContent = guess[i].toUpperCase();
+    wrap.appendChild(tile);
+  }
+  board && board.appendChild(wrap);
+}
+
+/* ===========================
+        Word + IDs
+=========================== */
+function compare(guess, target) {
+  guess = guess.toLowerCase();
+  const res = Array(guess.length).fill('n'), tcount = {};
+  for (let c of target) { tcount[c] = (tcount[c] || 0) + 1; }
+  for (let i = 0; i < guess.length; i++) { if (guess[i] === target[i]) { res[i] = 'g'; tcount[guess[i]]--; } }
+  for (let i = 0; i < guess.length; i++) { if (res[i] === 'n' && tcount[guess[i]] > 0) { res[i] = 'y'; tcount[guess[i]]--; } }
+  return res.join('');
+}
+function dailyWord(dayStr, stage) {
+  const seed = `${dayStr}#${stage}`;
+  const hash = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(seed));
+  const n = parseInt(hash.slice(2, 10), 16);
+  return WORDLIST[n % WORDLIST.length];
+}
+function currentSolution() { return dailyWord(todayStr, currentStage); }
+function dayStageId(dayStr, stage) {
+  const key = `${dayStr}#${stage}`;
+  return ethers.utils.keccak256(ethers.utils.toUtf8Bytes(key));
+}
+
+/* ===========================
+     Wallet / Network
+=========================== */
+async function ensureIrysChain(eip) {
+  const prov = new ethers.providers.Web3Provider(eip);
+  const net = await prov.getNetwork();
+  if (net.chainId !== parseInt(IRYS_CHAIN_ID_HEX, 16)) {
+    await eip.request({ method: "wallet_addEthereumChain", params: [IRYS_PARAMS] });
+    toast("Irys testnet switched", "success");
+  }
+}
+
+async function connect() {
+  const okx = window.okxwallet ? window.okxwallet : null;
+  const eip = okx || window.ethereum;
+  if (!eip) { toast("Install OKX Wallet (or another EVM wallet).", "error", 3800); return; }
+
+  showWalletModal(true);
+  try {
+    await eip.request({ method: "eth_requestAccounts" });
+    await ensureIrysChain(eip);
+    provider = new ethers.providers.Web3Provider(eip);
     signer = provider.getSigner();
     account = await signer.getAddress();
+
+    if (!ethers.utils.isAddress(CONTRACT_ADDRESS)) {
+      toast("Invalid CONTRACT_ADDRESS. Paste the full 0x… from Remix.", "error", 5200);
+      showWalletModal(false);
+      return;
+    }
+    await provider.getNetwork();
+    let code = "0x";
+    try { code = await provider.getCode(CONTRACT_ADDRESS); }
+    catch (e) { console.error("getCode failed:", e); toast("Could not read contract code.", "error", 5200); }
+    if (!code || code === "0x") {
+      toast("No contract at this address on this network.", "error", 5200);
+    }
+
+    contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+
     if (addrEl) addrEl.textContent = account;
-    logOk("Wallet connected");
+    if (addrShortEl) addrShortEl.textContent = short(account);
+    connectBtn && connectBtn.classList.add("hidden");
+    connectedGroup && connectedGroup.classList.remove("hidden");
+
+    await refreshBalance();
+    toast("Wallet connected", "success");
+  } catch (e) {
+    console.error(e);
+    toast(e?.message || "Connection rejected", "error", 4200);
+  } finally {
+    showWalletModal(false);
+  }
+}
+
+async function refreshBalance() {
+  if (!provider || !account) return;
+  const wei = await provider.getBalance(account);
+  const sym = IRYS_PARAMS.nativeCurrency?.symbol || "IRYS";
+  const val = Number(ethers.utils.formatEther(wei)).toFixed(3);
+  if (balanceText) balanceText.textContent = `${val} ${sym}`;
+}
+
+/* ===========================
+  Placeholder Irys upload
+=========================== */
+async function uploadAttemptToIrys(payload) {
+  // TODO: integrate Irys SDK and return a real content URI
+  return `irys://attempt-${Date.now()}`;
+}
+
+/* ===========================
+        Submit Guess
+=========================== */
+async function submitGuess() {
+  if (!signer) { await connect(); if (!signer) return; }
+
+  const net = await signer.provider.getNetwork();
+  if (net.chainId !== parseInt(IRYS_CHAIN_ID_HEX, 16)) {
+    toast("Please switch to Irys Testnet", "error"); return;
+  }
+
+  const bal = await provider.getBalance(account);
+  if (bal.eq(0)) toast("You need some test IRYS for gas.", "error", 4000);
+
+  if (currentStage > STAGES_PER_DAY) {
+    toast("Daily challenge already completed 🎉", "info"); return;
+  }
+
+  const guess = (guessEl.value || "").trim().toLowerCase();
+  if (!/^[a-z]{5}$/.test(guess)) { toast("Enter exactly 5 letters (A–Z).", "error"); return; }
+
+  const solution = currentSolution();
+  const pattern = compare(guess, solution);
+  renderRow(guess, pattern);
+
+  // Persist row immediately (even if tx fails), then save
+  gameRows.push({ stage: currentStage, guess, pattern });
+  saveState();
+
+  const solved = (pattern === 'ggggg');
+  if (mintStatus) mintStatus.textContent = "Uploading attempt (placeholder)…";
+  const uri = await uploadAttemptToIrys({
+    game: "irys-word-hunt", date: todayStr, stage: currentStage, wallet: account,
+    guess, result: pattern.replaceAll('n', '-').toUpperCase(), tryIndex, solved
+  });
+
+  const id = dayStageId(todayStr, currentStage);
+
+  const pending = toast("Sending Transaction", "info", 60000);
+  try {
+    const tx = await contract.submitAttempt(id, uri, solved, tryIndex);
+    await tx.wait();
+    pending.close();
+    toast("Transaction confirmed ✅", "success");
+    if (txLink) txLink.innerHTML = `<a href="${IRYS_PARAMS.blockExplorerUrls[0]}/tx/${tx.hash}" target="_blank">View Tx</a>`;
+    if (mintStatus) mintStatus.innerHTML = `<span class="ok">Recorded attempt #${tryIndex}${solved ? " (SOLVED)" : "."}</span>`;
+  } catch (e) {
+    pending.close();
+    console.error(e);
+    toast(e?.reason || e?.message || "Transaction failed", "error", 5000);
+    // still keep the row in local progress
+    tryIndex++;
+    guessEl.value = "";
+    saveState();
+    return;
+  }
+
+  tryIndex++;
+  guessEl.value = "";
+  saveState();
+
+  if (solved) {
+    // Auto-refresh leaderboard for the stage we just completed
+    try { await loadLeaderboardFor(todayStr, currentStage); } catch (_) { }
+
+    currentStage++;
+    if (currentStage <= STAGES_PER_DAY) {
+      if (stageNowEl) stageNowEl.textContent = currentStage;
+      tryIndex = 1;
+      const hr = document.createElement('hr'); board && board.appendChild(hr);
+    } else {
+      if (stageNowEl) stageNowEl.textContent = STAGES_PER_DAY;
+      toast("Daily challenge completed! 🎉", "success");
+      if (guessEl) guessEl.disabled = true;
+      if (submitBtn) submitBtn.disabled = true;
+    }
+    saveState(); // persist stage advance / completion
+  }
+}
+
+/* ===========================
+        Leaderboard
+=========================== */
+function renderLeaderboard(rows) {
+  if (!lbTableBody) return;
+  lbTableBody.innerHTML = "";
+  rows.forEach((r, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${i + 1}</td><td>${short(r.player)}</td><td>${r.bestTry}</td><td>${new Date(r.firstSolvedAt * 1000).toLocaleString()}</td>`;
+    lbTableBody.appendChild(tr);
+  });
+}
+
+async function loadLeaderboardFor(dayStr, stage) {
+  if (!provider) {
+    const okx = window.okxwallet ? window.okxwallet : null;
+    const eip = okx || window.ethereum;
+    if (!eip) { toast("No wallet provider", "error"); return; }
+    provider = new ethers.providers.Web3Provider(eip);
+  }
+  if (!contract && signer) {
     contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
   }
 
-  async function addOrSwitch(){
-    try {
-      await window.ethereum.request({ method: "wallet_addEthereumChain", params: [IRYS_PARAMS] });
-      logOk("Irys testnet added/switched.");
-    } catch(e){ logErr(e.message); }
-  }
+  if (lbStatus) lbStatus.textContent = "Loading attempts…";
 
-  // ====== Placeholder: Replace with real Irys SDK upload ======
-  async function uploadAttemptToIrys(payload){
-    // TODO: Upload JSON to Irys and return a URI like irys://xxxx
-    return `irys://attempt-${Date.now()}`;
-  }
+  const s = Math.max(1, Math.min(STAGES_PER_DAY, parseInt(stage || "1", 10)));
+  const dayIdHex = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(`${dayStr}#${s}`));
 
-  // ====== Submit Guess (with stage progression) ======
-  async function submitGuess(){
-    if (!signer){ await connect(); }
-    const net = await signer.provider.getNetwork();
-    if (net.chainId !== parseInt(IRYS_CHAIN_ID_HEX,16)){ alert("Switch to Irys Testnet"); return; }
+  const iface = new ethers.utils.Interface(ABI);
+  const eventTopic = iface.getEventTopic("Attempt");
 
-    if (currentStage > STAGES_PER_DAY){
-      alert("You already completed all stages for today! 🎉");
-      return;
-    }
+  const currentBlock = await provider.getBlockNumber();
+  const fromBlock = (DEPLOY_BLOCK && DEPLOY_BLOCK > 0)
+    ? DEPLOY_BLOCK
+    : Math.max(0, currentBlock - LB_LOOKBACK_BLOCKS);
 
-    const guess = (guessEl.value||"").trim().toLowerCase();
-    if (guess.length !== 5){ alert("Enter exactly 5 letters"); return; }
+  const filter = {
+    address: CONTRACT_ADDRESS,
+    fromBlock,
+    toBlock: "latest",
+    topics: [eventTopic, null, dayIdHex]
+  };
 
-    const solution = currentSolution();
-    const pattern = compare(guess, solution);
-    renderRow(guess, pattern);
+  let logs = [];
+  try { logs = await provider.getLogs(filter); }
+  catch (e) { console.error("getLogs error:", e); toast("Failed to read logs from RPC.", "error", 4500); return; }
 
-    const solved = (pattern === 'ggggg');
+  const best = new Map(); // addr -> { bestTry, firstSolvedAt }
+  for (const lg of logs) {
+    let parsed; try { parsed = iface.parseLog(lg); } catch { continue; }
+    const { player, solved, tryIndex } = parsed.args;
+    if (!solved) continue;
 
-    mintStatus && (mintStatus.textContent = "Uploading attempt (placeholder)…");
-    const uri = await uploadAttemptToIrys({
-      game: "irys-word-hunt",
-      date: todayStr,
-      stage: currentStage,
-      wallet: account,
-      guess,
-      result: pattern.replaceAll('n','-').toUpperCase(),
-      tryIndex,
-      solved
-    });
+    const addr = player.toLowerCase();
+    const block = await provider.getBlock(lg.blockNumber);
+    const ts = block.timestamp;
 
-    const id = dayStageId(todayStr, currentStage);
-
-    mintStatus && (mintStatus.textContent = "Sending onchain tx…");
-    const tx = await contract.submitAttempt(id, uri, solved, tryIndex);
-    await tx.wait();
-
-    if (txLink) txLink.innerHTML = `<a href="${IRYS_PARAMS.blockExplorerUrls[0]}/tx/${tx.hash}" target="_blank">View Tx</a>`;
-    mintStatus && (mintStatus.innerHTML = `<span class="ok">Recorded attempt #${tryIndex}${solved?" (SOLVED)":"."}</span>`);
-    tryIndex++;
-    guessEl.value = "";
-
-    if (solved){
-      currentStage++;
-      if (currentStage <= STAGES_PER_DAY){
-        stageNowEl && (stageNowEl.textContent = currentStage);
-        tryIndex = 1;
-        const hr = document.createElement('hr');
-        board && board.appendChild(hr);
-      } else {
-        stageNowEl && (stageNowEl.textContent = STAGES_PER_DAY);
-        mintStatus && (mintStatus.innerHTML += " 🎉 Daily challenge completed!");
-        guessEl.disabled = true;
-        submitBtn.disabled = true;
-      }
+    if (!best.has(addr)) best.set(addr, { bestTry: Number(tryIndex), firstSolvedAt: ts });
+    else {
+      const rec = best.get(addr);
+      if (Number(tryIndex) < rec.bestTry) rec.bestTry = Number(tryIndex);
+      else if (Number(tryIndex) === rec.bestTry && ts < rec.firstSolvedAt) rec.firstSolvedAt = ts;
     }
   }
 
-  // ====== Leaderboard (per-stage) ======
-  function renderLeaderboard(rows){
-    if (!lbTableBody) return;
-    lbTableBody.innerHTML = "";
-    rows.forEach((r, i) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td style="padding:6px 0;">${i+1}</td>
-        <td style="padding:6px 0;">${short(r.player)}</td>
-        <td style="padding:6px 0;">${r.bestTry}</td>
-        <td style="padding:6px 0;">${new Date(r.firstSolvedAt*1000).toLocaleString()}</td>
-      `;
-      lbTableBody.appendChild(tr);
-    });
-  }
+  const rows = Array.from(best.entries())
+    .map(([player, v]) => ({ player, ...v }))
+    .sort((a, b) => (a.bestTry - b.bestTry) || (a.firstSolvedAt - b.firstSolvedAt));
 
-  async function loadLeaderboardFor(dayStr, stage){
-    if (!provider || !contract) { await connect(); }
+  if (!rows.length) { if (lbStatus) lbStatus.textContent = "No solved attempts yet for this stage."; renderLeaderboard([]); return; }
+  if (lbStatus) lbStatus.textContent = `Found ${rows.length} solver(s).`;
+  renderLeaderboard(rows);
+}
 
-    lbStatus && (lbStatus.textContent = "Loading attempts…");
+/* ===========================
+           Wire Up
+=========================== */
+connectBtn && (connectBtn.onclick = connect);
+addrChip && (addrChip.onclick = () => navigator.clipboard?.writeText(account || ""));
+balanceChip && (balanceChip.onclick = refreshBalance);
 
-    const s = Math.max(1, Math.min(STAGES_PER_DAY, parseInt(stage || "1", 10)));
-    const dayId = ethers.utils.keccak256(ethers.utils.toUtf8Bytes(`${dayStr}#${s}`));
-    const filter = contract.filters.Attempt(null, dayId);
+submitBtn && (submitBtn.onclick = submitGuess);
+guessEl && guessEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitGuess(); });
 
-    let events = await contract.queryFilter(filter, DEPLOY_BLOCK, "latest");
-
-    const best = new Map(); // addr -> { bestTry, firstSolvedAt }
-    for (const ev of events) {
-      const { player, solved, tryIndex } = ev.args;
-      if (!solved) continue;
-      const addr = player.toLowerCase();
-
-      const block = await provider.getBlock(ev.blockNumber);
-      const ts = block.timestamp;
-
-      if (!best.has(addr)) {
-        best.set(addr, { bestTry: tryIndex, firstSolvedAt: ts });
-      } else {
-        const rec = best.get(addr);
-        if (tryIndex < rec.bestTry) {
-          rec.bestTry = tryIndex;
-          // keep earlier timestamp
-        } else if (tryIndex === rec.bestTry && ts < rec.firstSolvedAt) {
-          rec.firstSolvedAt = ts;
-        }
-      }
-    }
-
-    const rows = Array.from(best.entries()).map(([player, v]) => ({ player, ...v }));
-    rows.sort((a,b) => (a.bestTry - b.bestTry) || (a.firstSolvedAt - b.firstSolvedAt));
-
-    if (rows.length === 0) {
-      lbStatus && (lbStatus.textContent = "No solved attempts yet for this stage.");
-      renderLeaderboard([]);
-      return;
-    }
-
-    lbStatus && (lbStatus.textContent = `Found ${rows.length} solver(s).`);
-    renderLeaderboard(rows);
-  }
-
-  // ====== Wire-up ======
-  connectBtn  && (connectBtn.onclick  = connect);
-  addChainBtn && (addChainBtn.onclick = addOrSwitch);
-  submitBtn   && (submitBtn.onclick   = submitGuess);
-  loadLbBtn   && (loadLbBtn.onclick   = async () => {
-    try {
-      await loadLeaderboardFor(lbDate ? lbDate.value : todayStr, lbStageEl ? lbStageEl.value : "1");
-    } catch (e) {
-      lbStatus && (lbStatus.innerHTML = `<span class="err">${e.message}</span>`);
-    }
-  });
+loadLbBtn && (loadLbBtn.onclick = async () => {
+  try { await loadLeaderboardFor(lbDate ? lbDate.value : todayStr, lbStageEl ? lbStageEl.value : "1"); }
+  catch (e) { console.error(e); toast(e?.message || "Failed to load leaderboard", "error", 4200); }
+});

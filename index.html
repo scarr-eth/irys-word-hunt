@@ -1,67 +1,103 @@
 <!doctype html>
-<html>
-
+<html lang="en">
 <head>
-    <meta charset="utf-8" />
-    <title>Irys Word Hunt (Testnet)</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="stylesheet" href="main.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-    <script src="main.js" type="module"></script>
+  <meta charset="utf-8" />
+  <title>WORD HUNT | IRYS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="stylesheet" href="main.css" />
 </head>
-
 <body>
-
-    <h1>Irys Word Hunt (Testnet)</h1>
-
-    <div class="card">
-        <button id="connectBtn">Connect Wallet</button>
-        <button id="addChainBtn">Add/Switch to Irys Testnet</button>
-        <div id="status"></div>
+  <!-- Top nav -->
+  <header class="nav">
+    <div class="brand">
+      <div class="brand-mark"></div>
     </div>
-
-    <div class="card">
-        <div class="row">
-            <div><strong>Today:</strong> <span id="todayStr"></span></div>
-            <div><strong>Your address:</strong> <span id="addr"></span></div>
-        </div>
-        <p>Guess the 5-letter word. After each guess we record the attempt onchain with your wallet.</p>
-        <div class="row">
-            <input id="guess" maxlength="5" placeholder="type 5 letters" />
-            <button id="submitBtn">Submit Guess</button>
-        </div>
-        <div id="board"></div>
-        <div id="mintStatus" class="log"></div>
-        <div id="txLink"></div>
+    <div class="nav-right">
+      <div id="connectedGroup" class="hidden">
+        <button id="balanceChip" class="chip">
+          <span class="chip-icon">⚡</span>
+          <span id="balanceText">0.000 IRYS</span>
+        </button>
+        <button id="addrChip" class="chip">
+          <span class="chip-icon">👤</span>
+          <span id="addrShort">0x…</span>
+        </button>
+      </div>
+      <button id="connectBtn" class="cta">Connect Wallet</button>
     </div>
+  </header>
 
-    <div class="card">
-        <div class="row">
-            <div>
-                <strong>Leaderboard date:</strong>
-                <input type="date" id="lbDate" />
-            </div>
-            <br>
-            <div>
-                <button id="loadLbBtn">Load Leaderboard</button>
-            </div>
-        </div>
-        <div id="lbStatus" class="log"></div>
-        <table id="lbTable" style="width:100%; border-collapse: collapse; margin-top:10px;">
-            <thead>
-                <tr>
-                    <th style="text-align:left;border-bottom:1px solid #ddd;">#</th>
-                    <th style="text-align:left;border-bottom:1px solid #ddd;">Wallet</th>
-                    <th style="text-align:left;border-bottom:1px solid #ddd;">Best Try</th>
-                    <th style="text-align:left;border-bottom:1px solid #ddd;">First Solved</th>
-                </tr>
-            </thead>
-            <tbody></tbody>
-        </table>
+  <!-- Hero -->
+  <section class="hero">
+    <h1>WORD HUNT | IRYS</h1>
+  </section>
+
+  <main class="wrap">
+    <!-- Game -->
+    <section class="card">
+      <div class="row">
+        <div><strong>Today:</strong> <span id="todayStr"></span></div>
+        <div><strong>Your address:</strong> <span id="addr"></span></div>
+      </div>
+
+      <p><strong>Stage:</strong> <span id="stageNow">1</span> / <span id="stageTotal">4</span></p>
+
+      <p>Guess the 5-letter word. After each solve, a new stage unlocks (4 per day). Each attempt is recorded on-chain.</p>
+
+      <div class="row">
+        <input id="guess" maxlength="5" placeholder="type 5 letters" autocomplete="off" />
+        <button id="submitBtn" class="primary">Submit Guess</button>
+      </div>
+
+      <div id="board" class="board"></div>
+      <div id="mintStatus" class="log"></div>
+      <div id="txLink" class="log"></div>
+    </section>
+
+    <!-- Leaderboard -->
+    <section class="card">
+      <div class="row lb-row">
+        <div><strong>Leaderboard date:</strong> <input type="date" id="lbDate" /></div>
+        <div><strong>Stage:</strong> <input type="number" id="lbStage" min="1" max="4" value="1" /></div>
+        <div><button id="loadLbBtn" class="ghost-btn">Load Leaderboard</button></div>
+      </div>
+
+      <div id="lbStatus" class="log"></div>
+
+      <table id="lbTable" class="table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Wallet</th>
+            <th>Best Try</th>
+            <th>First Solved</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <!-- OKX-style modal -->
+  <div id="walletModal" role="dialog" aria-modal="true" aria-label="Wallet connection">
+    <div class="wallet-card">
+      <div class="modal-x" id="walletModalClose" aria-label="Close">&times;</div>
+      <div class="okx-logo big" aria-hidden="true">
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+      </div>
+      <h3>Opening OKX Wallet…</h3>
+      <p>Confirm connection in the extension</p>
+      <div class="spinner"></div>
     </div>
+  </div>
 
+  <!-- Toasts -->
+  <div id="toastHost" aria-live="polite" aria-atomic="true"></div>
 
-
+  <!-- App -->
+  <script type="module" src="main.js"></script>
 </body>
-
 </html>
